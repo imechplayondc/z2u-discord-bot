@@ -41,8 +41,7 @@ export async function createTicketChannel(
 ): Promise<TextChannel> {
   const member = await guild.members.fetch(userId);
   const username = member.user.username.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const ticketCount = await Ticket.countDocuments({ guildId: guild.id });
-  const channelName = `ticket-${username}-${ticketCount + 1}`;
+  const channelName = `ticket-${username}`;
 
   const category = guild.channels.cache.get(panel.ticketCategory) as CategoryChannel | undefined;
 
