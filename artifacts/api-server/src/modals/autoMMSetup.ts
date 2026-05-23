@@ -10,34 +10,42 @@ import GuildConfig from "../models/GuildConfig.js";
 import { parseColor } from "../utils/colors.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
 
+// Payment methods with Unicode fallback emoji (custom emoji optional)
 const PAYMENT_METHODS = [
-  { name: "PayPal", value: "PayPal", emoji: { id: "1506339857486708747", name: "paypal" } },
-  { name: "Ethereum (ETH)", value: "Ethereum", emoji: { id: "1506339815937933347", name: "ethemoji" } },
-  { name: "Bitcoin (BTC)", value: "Bitcoin", emoji: { id: "1506339770458968265", name: "btcemoji" } },
-  { name: "Solana (SOL)", value: "Solana", emoji: { id: "1506339640473288885", name: "Solana" } },
-  { name: "USDT (ETH)", value: "USDT_ETH", emoji: { id: "1506339246989119568", name: "USDTEth" } },
-  { name: "USDC (ETH)", value: "USDC_ETH", emoji: { id: "1506339308813025331", name: "USDCEth" } },
-  { name: "USDT (SOL)", value: "USDT_SOL", emoji: { id: "1506339430196183131", name: "USDTSol" } },
-  { name: "USDC (SOL)", value: "USDC_SOL", emoji: { id: "1506339480678957219", name: "USDCSol" } },
-  { name: "USDT (ERC-20)", value: "USDT_ERC20", emoji: { id: "1506339547074789497", name: "usdteth" } },
-  { name: "Litecoin (LTC)", value: "Litecoin", emoji: { id: "1506339034157285659", name: "Ltc" } },
+  { name: "PayPal", value: "PayPal", emoji: "💳" },
+  { name: "Ethereum (ETH)", value: "Ethereum", emoji: "🔷" },
+  { name: "Bitcoin (BTC)", value: "Bitcoin", emoji: "🟠" },
+  { name: "Solana (SOL)", value: "Solana", emoji: "🟣" },
+  { name: "USDT (ETH)", value: "USDT_ETH", emoji: "💵" },
+  { name: "USDC (ETH)", value: "USDC_ETH", emoji: "💲" },
+  { name: "USDT (SOL)", value: "USDT_SOL", emoji: "💰" },
+  { name: "USDC (SOL)", value: "USDC_SOL", emoji: "🏦" },
+  { name: "USDT (ERC-20)", value: "USDT_ERC20", emoji: "📊" },
+  { name: "Litecoin (LTC)", value: "Litecoin", emoji: "⚡" },
 ];
 
 export default {
   customId: "automm_setup",
   async execute(interaction: ModalSubmitInteraction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 64 });
 
     // Parse IDs from customId: automm_setup_CATID_ROLEID_CHANNELID
-    const parts = interaction.customId.split("_");
-    const categoryId = parts[2];
-    const staffRoleId = parts[3];
-    const panelChannelId = parts[4];
+    // Discord snowflakes are 17-19 digits with no underscores — safe to split
+    const raw = interaction.customId.replace("automm_setup_", "");
+    const parts = raw.split("_");
+
+    if (parts.length < 3) {
+      return interaction.editReply({ embeds: [errorEmbed("Error", "Invalid setup data. Run `/autommpanel` again.")] });
+    }
+
+    const categoryId = parts[0];
+    const staffRoleId = parts[1];
+    const panelChannelId = parts[2];
 
     const title = interaction.fields.getTextInputValue("title");
     const description = interaction.fields.getTextInputValue("description");
+    const colorHex = interaction.fields.getTextInputValue("color").trim() || "#00b4d8";
     const imageUrl = interaction.fields.getTextInputValue("image")?.trim() || undefined;
-    const colorHex = interaction.fields.getTextInputValue("color") || "#00b4d8";
 
     const color = parseColor(colorHex);
 
@@ -56,7 +64,7 @@ export default {
 
     const panelChannel = interaction.guild!.channels.cache.get(panelChannelId) as TextChannel | undefined;
     if (!panelChannel) {
-      return interaction.editReply({ embeds: [errorEmbed("Error", "Panel channel not found.")] });
+      return interaction.editReply({ embeds: [errorEmbed("Error", "Panel channel not found. Make sure the bot has access.")] });
     }
 
     const embed = new EmbedBuilder()
@@ -88,7 +96,16 @@ export default {
     await panelChannel.send({ embeds: [embed], components: [row] });
 
     return interaction.editReply({
-      embeds: [successEmbed("AutoMM Panel Created", `AutoMM panel sent to <#${panelChannelId}>!`)],
+      embeds: [
+        successEmbed(
+          "AutoMM Panel Created",
+          `Panel sent to <#${panelChannelId}>!\n\n` +
+          `**Category:** <#${categoryId}>\n` +
+          `**Staff Role:** <@&${staffRoleId}>\n\n` +
+          `Users can now select a payment method to open AutoMM tickets. ` +
+          `Make sure sellers run \`/wallet set\` first.`
+        ),
+      ],
     });
   },
 };

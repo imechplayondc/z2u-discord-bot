@@ -4,6 +4,7 @@ import {
   ButtonInteraction,
   ModalSubmitInteraction,
   StringSelectMenuInteraction,
+  Collection,
 } from "discord.js";
 import { BotClient } from "../bot/client.js";
 import { botLog } from "../utils/logger.js";
@@ -24,10 +25,43 @@ export default {
         await handleSelectMenu(client, interaction);
       }
     } catch (err) {
-      botLog("error", "Interaction error:", err);
+      botLog("error", "Top-level interaction error:", err);
     }
   },
 };
+
+/**
+ * Find a handler by:
+ * 1. Exact string key match
+ * 2. Regex source key match (e.g. stored as "^verify_proof_", tested against full customId)
+ * 3. Progressively shorter prefix matches (longest-first, min 2 parts)
+ */
+function resolveHandler(map: Collection<string, any>, customId: string): any | undefined {
+  // 1. Exact match
+  const exact = map.get(customId);
+  if (exact) return exact;
+
+  // 2. Regex source match — stored key is the regex source string
+  for (const [key, handler] of map) {
+    if (key.includes("(") || key.startsWith("^") || key.endsWith("_")) {
+      try {
+        if (new RegExp(key).test(customId)) return handler;
+      } catch {
+        // not a valid regex, skip
+      }
+    }
+  }
+
+  // 3. Prefix matching — try from longest prefix down to 2 parts
+  const parts = customId.split("_");
+  for (let len = parts.length - 1; len >= 2; len--) {
+    const prefix = parts.slice(0, len).join("_");
+    const h = map.get(prefix);
+    if (h) return h;
+  }
+
+  return undefined;
+}
 
 async function handleCommand(client: BotClient, interaction: ChatInputCommandInteraction) {
   const command = client.commands.get(interaction.commandName);
@@ -38,102 +72,60 @@ async function handleCommand(client: BotClient, interaction: ChatInputCommandInt
     botLog("error", `Command ${interaction.commandName} error:`, err);
     const embed = errorEmbed("Error", "Something went wrong running that command.");
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({ embeds: [embed], ephemeral: true });
+      await interaction.followUp({ embeds: [embed], flags: 64 });
     } else {
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed], flags: 64 });
     }
   }
 }
 
 async function handleButton(client: BotClient, interaction: ButtonInteraction) {
-  const customId = interaction.customId;
-  let handler = client.buttons.get(customId);
-
+  const handler = resolveHandler(client.buttons as unknown as Collection<string, any>, interaction.customId);
   if (!handler) {
-    for (const [key, btn] of client.buttons) {
-      if (key instanceof RegExp && key.test(customId)) {
-        handler = btn;
-        break;
-      }
-    }
+    botLog("warn", `No button handler for: ${interaction.customId}`);
+    return;
   }
-
-  if (!handler) {
-    const prefix = customId.split("_").slice(0, 2).join("_");
-    handler = client.buttons.get(prefix);
-  }
-
-  if (!handler) return;
-
   try {
     await handler.execute(interaction);
   } catch (err) {
-    botLog("error", `Button ${customId} error:`, err);
+    botLog("error", `Button ${interaction.customId} error:`, err);
     const embed = errorEmbed("Error", "Something went wrong.");
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({ embeds: [embed], ephemeral: true });
+      await interaction.followUp({ embeds: [embed], flags: 64 });
     } else {
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed], flags: 64 });
     }
   }
 }
 
 async function handleModal(client: BotClient, interaction: ModalSubmitInteraction) {
-  const customId = interaction.customId;
-  let handler = client.modals.get(customId);
-
+  const handler = resolveHandler(client.modals as unknown as Collection<string, any>, interaction.customId);
   if (!handler) {
-    for (const [key, modal] of client.modals) {
-      if (key instanceof RegExp && key.test(customId)) {
-        handler = modal;
-        break;
-      }
-    }
+    botLog("warn", `No modal handler for: ${interaction.customId}`);
+    return;
   }
-
-  if (!handler) {
-    const prefix = customId.split("_").slice(0, 2).join("_");
-    handler = client.modals.get(prefix);
-  }
-
-  if (!handler) return;
-
   try {
     await handler.execute(interaction);
   } catch (err) {
-    botLog("error", `Modal ${customId} error:`, err);
+    botLog("error", `Modal ${interaction.customId} error:`, err);
     const embed = errorEmbed("Error", "Something went wrong.");
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({ embeds: [embed], ephemeral: true });
+      await interaction.followUp({ embeds: [embed], flags: 64 });
     } else {
-      await interaction.reply({ embeds: [embed], ephemeral: true });
+      await interaction.reply({ embeds: [embed], flags: 64 });
     }
   }
 }
 
 async function handleSelectMenu(client: BotClient, interaction: StringSelectMenuInteraction) {
-  const customId = interaction.customId;
-  let handler = client.selectMenus.get(customId);
-
+  const handler = resolveHandler(client.selectMenus as unknown as Collection<string, any>, interaction.customId);
   if (!handler) {
-    for (const [key, menu] of client.selectMenus) {
-      if (key instanceof RegExp && key.test(customId)) {
-        handler = menu;
-        break;
-      }
-    }
+    botLog("warn", `No select menu handler for: ${interaction.customId}`);
+    return;
   }
-
-  if (!handler) {
-    const prefix = customId.split("_").slice(0, 2).join("_");
-    handler = client.selectMenus.get(prefix);
-  }
-
-  if (!handler) return;
-
   try {
     await handler.execute(interaction);
   } catch (err) {
-    botLog("error", `SelectMenu ${customId} error:`, err);
+    botLog("error", `SelectMenu ${interaction.customId} error:`, err);
   }
 }
