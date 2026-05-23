@@ -7,109 +7,120 @@ import {
   TextChannel,
 } from "discord.js";
 import Panel from "../models/Panel.js";
+import PanelSession from "../models/PanelSession.js";
 import { parseColor } from "../utils/colors.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
 
 export default {
   customId: "panel_setup_step3",
   async execute(interaction: ModalSubmitInteraction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: 64 });
 
-    // Parse customId: panel_setup_step3_TYPE_NAME_CATID_ROLEID_TRANSCRIPTID_SENDCH_LOGCH_IMAGE
-    const raw = interaction.customId.replace("panel_setup_step3_", "");
-    const parts = raw.split("_");
+    const sessionId = interaction.customId.replace("panel_setup_step3_", "");
+    const session = await PanelSession.findOne({ sessionId, guildId: interaction.guildId });
 
-    const type = parts[0];
-    const name = parts[1];
-    const categoryId = parts[2];
-    const roleId = parts[3];
-    const transcriptChannelId = parts[4];
-    const sendChannelId = parts[5];
-    const logChannel = parts[6] === "none" ? undefined : parts[6];
-    const image = parts[7] === "none" ? undefined : parts[7];
+    if (!session) {
+      return interaction.editReply({
+        embeds: [errorEmbed("Session Expired", "Your panel setup session expired (10 min limit). Please run `/panel create` again.")],
+      });
+    }
 
     const title = interaction.fields.getTextInputValue("title");
     const description = interaction.fields.getTextInputValue("description");
-    const footer = interaction.fields.getTextInputValue("footer") || "Click the button below to open a ticket";
-    const colorHex = interaction.fields.getTextInputValue("color") || "#00b4d8";
+    const footerColor = interaction.fields.getTextInputValue("footer_color")?.trim() || "";
     const buttonRaw = interaction.fields.getTextInputValue("button");
+    const questionsRaw = interaction.fields.getTextInputValue("questions")?.trim() || "";
 
-    const buttonParts = buttonRaw.split("|").map((s) => s.trim());
-    const buttonName = buttonParts[0] || "Open Ticket";
-    const buttonEmoji = buttonParts[1] || "🎫";
-    const customQuestions = buttonParts.slice(2).filter(Boolean);
+    // Parse footer | color
+    const fcParts = footerColor.split("|").map((s) => s.trim());
+    const footerText = fcParts[0] || "Click the button below to open a ticket";
+    const colorHex = fcParts[1]?.startsWith("#") ? fcParts[1] : (fcParts[0]?.startsWith("#") ? fcParts[0] : "#00b4d8");
 
-    const sendChannel = interaction.guild!.channels.cache.get(sendChannelId) as TextChannel | undefined;
+    // Parse button label | emoji
+    const btnParts = buttonRaw.split("|").map((s) => s.trim());
+    const buttonName = btnParts[0] || "Open Ticket";
+    const buttonEmoji = btnParts[1] || "🎫";
+
+    // Parse custom questions
+    const customQuestions = questionsRaw
+      ? questionsRaw.split("|").map((q) => q.trim()).filter(Boolean)
+      : [];
+
+    // Validate send channel
+    const sendChannel = interaction.guild!.channels.cache.get(session.sendChannelId) as TextChannel | undefined;
     if (!sendChannel) {
-      return interaction.editReply({ embeds: [errorEmbed("Error", "Send channel not found. Check the channel ID.")] });
+      await PanelSession.deleteOne({ sessionId });
+      return interaction.editReply({
+        embeds: [errorEmbed("Channel Not Found", `Could not find channel ID \`${session.sendChannelId}\`. Make sure the bot has access to it.`)],
+      });
     }
 
+    // Build the panel embed
     const color = parseColor(colorHex);
     const embed = new EmbedBuilder()
       .setColor(color)
       .setTitle(title)
       .setDescription(description)
-      .setFooter({ text: footer })
+      .setFooter({ text: footerText })
       .setTimestamp();
 
-    if (image) embed.setImage(image);
+    if (session.imageUrl) embed.setImage(session.imageUrl);
 
-    const row = new ActionRowBuilder<ButtonBuilder>();
+    // Send panel message with a placeholder button first
+    const placeholderRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId("open_ticket_placeholder")
+        .setLabel(buttonName)
+        .setEmoji(buttonEmoji)
+        .setStyle(ButtonStyle.Primary)
+    );
 
-    if (type === "link") {
-      row.addComponents(
-        new ButtonBuilder()
-          .setLabel(buttonName)
-          .setEmoji(buttonEmoji)
-          .setURL("https://z2u.com")
-          .setStyle(ButtonStyle.Link)
-      );
-    } else {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`open_ticket_PLACEHOLDER`)
-          .setLabel(buttonName)
-          .setEmoji(buttonEmoji)
-          .setStyle(ButtonStyle.Primary)
-      );
-    }
+    const msg = await sendChannel.send({ embeds: [embed], components: [placeholderRow] });
 
-    const msg = await sendChannel.send({ embeds: [embed], components: [row] });
-
+    // Save panel to DB
     const panel = await Panel.create({
       guildId: interaction.guildId,
-      channelId: sendChannelId,
+      channelId: session.sendChannelId,
       messageId: msg.id,
-      name,
+      name: session.name,
       title,
       description,
-      footerText: footer,
+      footerText,
       buttonName,
       buttonEmoji,
       embedColor: colorHex,
       customQuestions,
-      ticketCategory: categoryId,
-      supportRole: roleId,
-      transcriptChannel: transcriptChannelId,
-      logChannel,
-      panelImage: image,
-      buttonType: type as any,
+      ticketCategory: session.categoryId,
+      supportRole: session.roleId,
+      transcriptChannel: session.transcriptChannelId,
+      logChannel: session.logChannelId,
+      panelImage: session.imageUrl,
+      buttonType: session.type as any,
     });
 
-    // Edit the message to use the real panel ID in the button customId
-    if (type !== "link") {
-      const updatedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`open_ticket_${panel._id}`)
-          .setLabel(buttonName)
-          .setEmoji(buttonEmoji)
-          .setStyle(ButtonStyle.Primary)
-      );
-      await msg.edit({ components: [updatedRow] });
-    }
+    // Edit message with real panel ID in button customId
+    const realRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`open_ticket_${panel._id}`)
+        .setLabel(buttonName)
+        .setEmoji(buttonEmoji)
+        .setStyle(ButtonStyle.Primary)
+    );
+    await msg.edit({ components: [realRow] });
+
+    // Clean up session
+    await PanelSession.deleteOne({ sessionId });
 
     return interaction.editReply({
-      embeds: [successEmbed("Panel Created", `Panel **${name}** has been created in <#${sendChannelId}>!`)],
+      embeds: [
+        successEmbed(
+          "Panel Created!",
+          `**${session.name}** panel is live in <#${session.sendChannelId}>!\n\n` +
+          `**Type:** ${session.type}\n` +
+          `**Button:** ${buttonEmoji} ${buttonName}\n` +
+          `**Questions:** ${customQuestions.length > 0 ? customQuestions.join(", ") : "None"}`
+        ),
+      ],
     });
   },
 };

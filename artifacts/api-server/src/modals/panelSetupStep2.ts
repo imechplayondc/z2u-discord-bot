@@ -5,73 +5,98 @@ import {
   TextInputStyle,
   ActionRowBuilder,
 } from "discord.js";
+import { randomUUID } from "crypto";
+import PanelSession from "../models/PanelSession.js";
+import { errorEmbed } from "../utils/embeds.js";
 
 export default {
   customId: "panel_setup_step2",
   async execute(interaction: ModalSubmitInteraction) {
-    const parts = interaction.customId.split("_");
-    const type = parts[parts.length - 1] as string;
+    const type = interaction.customId.replace("panel_setup_step2_", "");
 
-    const name = interaction.fields.getTextInputValue("name").toLowerCase().replace(/\s+/g, "-");
-    const channels = interaction.fields.getTextInputValue("channels");
-    const logChannel = interaction.fields.getTextInputValue("logchannel").trim() || undefined;
-    const image = interaction.fields.getTextInputValue("image").trim() || undefined;
-    const sendChannel = interaction.fields.getTextInputValue("send_channel").trim();
+    const name = interaction.fields.getTextInputValue("name").toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    const categoryId = interaction.fields.getTextInputValue("category_id").trim();
+    const roleId = interaction.fields.getTextInputValue("role_id").trim();
+    const channelIds = interaction.fields.getTextInputValue("channel_ids").trim();
+    const optionalIds = interaction.fields.getTextInputValue("optional_ids")?.trim() || "";
 
-    const [categoryId, roleId, transcriptChannelId] = channels.split("|").map((s) => s.trim());
+    const channelParts = channelIds.split("|").map((s) => s.trim());
+    const transcriptChannelId = channelParts[0];
+    const sendChannelId = channelParts[1];
 
-    if (!categoryId || !roleId || !transcriptChannelId) {
-      const { errorEmbed } = await import("../utils/embeds.js");
+    if (!transcriptChannelId || !sendChannelId) {
       return interaction.reply({
-        embeds: [errorEmbed("Invalid Format", "Please use format: `categoryId|roleId|transcriptChannelId`")],
-        ephemeral: true,
+        embeds: [errorEmbed("Invalid Format", 'Use format: `transcriptChannelId|sendChannelId`')],
+        flags: 64,
       });
     }
 
-    // Step 3: Ask for embed config
+    const optParts = optionalIds.split("|").map((s) => s.trim());
+    const logChannelId = optParts[0] || undefined;
+    const imageUrl = optParts[1] || undefined;
+
+    // Store session in DB so we don't overflow customId limits
+    const sessionId = randomUUID().replace(/-/g, "").slice(0, 16);
+    await PanelSession.create({
+      sessionId,
+      guildId: interaction.guildId,
+      userId: interaction.user.id,
+      type,
+      name,
+      categoryId,
+      roleId,
+      transcriptChannelId,
+      sendChannelId,
+      logChannelId,
+      imageUrl,
+    });
+
+    // Step 3 modal — embed design
     const modal = new ModalBuilder()
-      .setCustomId(`panel_setup_step3_${type}_${name}_${categoryId}_${roleId}_${transcriptChannelId}_${sendChannel}_${logChannel || "none"}_${image || "none"}`)
-      .setTitle("Panel Embed Configuration");
+      .setCustomId(`panel_setup_step3_${sessionId}`)
+      .setTitle("Panel Setup — Step 3/3");
 
     modal.addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("title")
-          .setLabel("Panel Title")
+          .setLabel("Panel embed title")
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("🎫 Support Tickets")
+          .setMaxLength(256)
           .setRequired(true)
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("description")
-          .setLabel("Panel Description")
+          .setLabel("Panel embed description")
           .setStyle(TextInputStyle.Paragraph)
+          .setMaxLength(4000)
           .setRequired(true)
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
-          .setCustomId("footer")
-          .setLabel("Footer Text")
+          .setCustomId("footer_color")
+          .setLabel("Footer text | Embed color (hex)")
           .setStyle(TextInputStyle.Short)
-          .setValue("Click the button below to open a ticket")
-          .setRequired(false)
-      ),
-      new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder()
-          .setCustomId("color")
-          .setLabel("Embed Color (hex, e.g. #00b4d8)")
-          .setStyle(TextInputStyle.Short)
-          .setValue("#00b4d8")
+          .setPlaceholder("Open a ticket below|#00b4d8")
           .setRequired(false)
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId("button")
-          .setLabel("Button Name | Button Emoji | Custom Questions (with |)")
+          .setLabel("Button label | Button emoji")
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder("Open Ticket|🎫|What is your issue?|Your username?")
+          .setPlaceholder("Open Ticket|🎫")
           .setRequired(true)
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("questions")
+          .setLabel("Custom questions (separated by |)")
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder("What is your issue?|Your username?|Order ID?")
+          .setRequired(false)
       )
     );
 
