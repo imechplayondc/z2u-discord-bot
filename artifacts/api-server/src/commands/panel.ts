@@ -11,7 +11,7 @@ import {
 } from "discord.js";
 import Panel from "../models/Panel.js";
 import PanelSession from "../models/PanelSession.js";
-import { randomUUID } from "crypto";
+
 import { isAdmin } from "../utils/permissions.js";
 import { errorEmbed, successEmbed } from "../utils/embeds.js";
 import { COLORS } from "../utils/colors.js";
@@ -115,7 +115,7 @@ export default {
     const image = interaction.options.getString("image", false);
 
     // Store config in a session so the modal handler can access it
-    const sessionId = randomUUID().replace(/-/g, "").slice(0, 16);
+    const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     await PanelSession.create({
       sessionId,
       guildId: interaction.guildId,
