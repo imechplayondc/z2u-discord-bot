@@ -10,6 +10,7 @@ import Panel from "../models/Panel.js";
 import PanelSession from "../models/PanelSession.js";
 import { parseColor } from "../utils/colors.js";
 import { successEmbed, errorEmbed } from "../utils/embeds.js";
+import { botLog } from "../utils/logger.js";
 
 export default {
   customId: "panel_embed_modal",
@@ -32,7 +33,14 @@ export default {
     const buttonRaw = interaction.fields.getTextInputValue("button").trim();
     const questionsRaw = interaction.fields.getTextInputValue("questions")?.trim() || "";
 
-    // Check name is unique in this guild
+    if (!name) {
+      await PanelSession.deleteOne({ sessionId });
+      return interaction.editReply({
+        embeds: [errorEmbed("Invalid Name", "Panel name must contain at least one letter or number.")],
+      });
+    }
+
+    // Check name uniqueness
     const existing = await Panel.findOne({ guildId: interaction.guildId, name });
     if (existing) {
       await PanelSession.deleteOne({ sessionId });
@@ -47,12 +55,11 @@ export default {
     const buttonEmoji = btnParts[1] || "🎫";
     const colorHex = (btnParts[2] || "#00b4d8").startsWith("#") ? (btnParts[2] || "#00b4d8") : "#00b4d8";
 
-    // Parse questions
+    // Parse custom questions
     const customQuestions = questionsRaw
       ? questionsRaw.split("|").map((q) => q.trim()).filter(Boolean).slice(0, 5)
       : [];
 
-    // Find send channel
     const sendChannel = interaction.guild!.channels.cache.get(session.sendChannelId) as TextChannel | undefined;
     if (!sendChannel) {
       await PanelSession.deleteOne({ sessionId });
@@ -71,22 +78,11 @@ export default {
 
     if (session.imageUrl) embed.setImage(session.imageUrl);
 
-    // Send with placeholder button, then update with real panel ID
-    const placeholderRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId("open_ticket_placeholder")
-        .setLabel(buttonName)
-        .setEmoji(buttonEmoji)
-        .setStyle(ButtonStyle.Primary)
-    );
-
-    const msg = await sendChannel.send({ embeds: [embed], components: [placeholderRow] });
-
-    // Save panel
+    // Save the panel FIRST so we have the real ID before sending the message
     const panel = await Panel.create({
       guildId: interaction.guildId,
       channelId: session.sendChannelId,
-      messageId: msg.id,
+      messageId: "pending",
       name,
       title,
       description,
@@ -103,15 +99,30 @@ export default {
       buttonType: session.type as any,
     });
 
-    // Update message with real panel ID
-    const realRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    // Send message with the real panel ID already in the button — no placeholder needed
+    const panelRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(`open_ticket_${panel._id}`)
         .setLabel(buttonName)
         .setEmoji(buttonEmoji)
         .setStyle(ButtonStyle.Primary)
     );
-    await msg.edit({ components: [realRow] });
+
+    let msg;
+    try {
+      msg = await sendChannel.send({ embeds: [embed], components: [panelRow] });
+    } catch (err) {
+      // If send fails, clean up the panel record so the name doesn't stay taken
+      await Panel.findByIdAndDelete(panel._id);
+      await PanelSession.deleteOne({ sessionId });
+      botLog("error", "Failed to send panel message:", err);
+      return interaction.editReply({
+        embeds: [errorEmbed("Send Failed", "Could not send the panel to the channel. Check that the bot has permission to send messages there.")],
+      });
+    }
+
+    // Update panel with the real message ID
+    await Panel.findByIdAndUpdate(panel._id, { messageId: msg.id });
 
     await PanelSession.deleteOne({ sessionId });
 
