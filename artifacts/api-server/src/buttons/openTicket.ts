@@ -14,7 +14,6 @@ import { errorEmbed } from "../utils/embeds.js";
 import { COLORS } from "../utils/colors.js";
 import { botLog } from "../utils/logger.js";
 
-/** Validate a MongoDB ObjectId without importing mongoose */
 function isValidObjectId(id: string): boolean {
   return /^[a-f\d]{24}$/i.test(id);
 }
@@ -25,10 +24,9 @@ export default {
     try {
       const panelId = interaction.customId.replace("open_ticket_", "");
 
-      // Catch stale/broken buttons (placeholder or empty ID)
       if (!panelId || panelId === "placeholder" || !isValidObjectId(panelId)) {
         return interaction.reply({
-          embeds: [errorEmbed("Panel Error", "This panel button is outdated. Please ask an admin to recreate the panel with `/panel create`.")],
+          embeds: [errorEmbed("Panel Error", "This panel button is outdated. Ask an admin to recreate the panel with `/panel create`.")],
           flags: 64,
         });
       }
@@ -50,7 +48,7 @@ export default {
         });
       }
 
-      // Check for existing open ticket
+      // Check for existing open ticket for this user on this panel
       const existingTicket = await Ticket.findOne({
         guildId: interaction.guildId,
         userId: interaction.user.id,
@@ -59,10 +57,21 @@ export default {
       });
 
       if (existingTicket) {
-        return interaction.reply({
-          embeds: [errorEmbed("Already Open", `You already have an open ticket: <#${existingTicket.channelId}>`)],
-          flags: 64,
-        });
+        // Verify the channel still exists — if not, auto-close the stale record
+        const channelExists = interaction.guild!.channels.cache.has(existingTicket.channelId);
+        if (!channelExists) {
+          // Channel was deleted without clicking Close — clean up and allow a new ticket
+          await Ticket.findByIdAndUpdate(existingTicket._id, {
+            status: "closed",
+            closedAt: new Date(),
+            closedBy: "auto-cleanup",
+          });
+        } else {
+          return interaction.reply({
+            embeds: [errorEmbed("Already Open", `You already have an open ticket: <#${existingTicket.channelId}>`)],
+            flags: 64,
+          });
+        }
       }
 
       // Cooldown check
@@ -109,7 +118,7 @@ export default {
         botLog("error", "createTicketChannel failed:", err);
         const msg = err instanceof Error ? err.message : "Unknown error";
         return interaction.editReply({
-          embeds: [errorEmbed("Ticket Creation Failed", `Could not create ticket channel. Check that the bot has **Manage Channels** permission in the ticket category.\n\nDetails: \`${msg.slice(0, 200)}\``)],
+          embeds: [errorEmbed("Ticket Creation Failed", `Could not create the ticket channel. Make sure the bot has **Manage Channels** permission in the ticket category.\n\`${msg.slice(0, 200)}\``)],
         });
       }
 
@@ -129,9 +138,7 @@ export default {
     } catch (err) {
       botLog("error", "openTicket unexpected error:", err);
       const reply = { embeds: [errorEmbed("Error", "An unexpected error occurred. Please try again or contact an admin.")], flags: 64 as const };
-      if (interaction.replied || interaction.deferred) {
-        return interaction.editReply(reply);
-      }
+      if (interaction.replied || interaction.deferred) return interaction.editReply(reply);
       return interaction.reply(reply);
     }
   },
